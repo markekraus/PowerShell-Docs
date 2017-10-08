@@ -18,8 +18,9 @@ Gets content from a web page on the Internet.
 ```
 Invoke-WebRequest [-UseBasicParsing] [-Uri] <Uri> [-WebSession <WebRequestSession>]
  [-SessionVariable <String>] [-Credential <PSCredential>] [-UseDefaultCredentials]
- [-CertificateThumbprint <String>] [-Certificate <X509Certificate>] [-SkipCertificateCheck] [-UserAgent <String>]
- [-DisableKeepAlive] [-TimeoutSec <Int32>] [-Headers <IDictionary>] [-SkipHeaderValidation] [-MaximumRedirection <Int32>] [-PreserveAuthorizationOnRedirect] 
+ [-CertificateThumbprint <String>] [-Certificate <X509Certificate>] [-CertificateValidationScript <ScriptBlock>]
+ [-SkipCertificateCheck] [-UserAgent <String>] [-DisableKeepAlive] [-TimeoutSec <Int32>] [-Headers <IDictionary>]
+ [-SkipHeaderValidation] [-MaximumRedirection <Int32>] [-PreserveAuthorizationOnRedirect]
  [-Method <WebRequestMethod>] [-CustomMethod <String>] [-Proxy <Uri>] [-ProxyCredential <PSCredential>]
  [-ProxyUseDefaultCredentials] [-NoProxy] [-Body <Object>] [-ContentType <String>]
  [-TransferEncoding <String>] [-InFile <String>] [-OutFile <String>] [-PassThru]
@@ -156,6 +157,42 @@ $response = Invoke-WebRequest -Body $multipartContent -Method 'POST' -uri 'https
 
 This example uses the **Invoke-WebRequest** cmdlet upload a file as a `multipart/form-data` submission. The file `c:\document.txt` will be submitted as the form field `document` with the `Content-Type` of `text/plain`.
 
+### Example 5: Custom CertificateValidationScript (Permissive)
+The following example shows how to use `-CertificateValidationScript` with a custom script to allow any Certificate that has the Certificate Thumbprint of `934367bf1c97033f877db0f15cb1b586957d313` while all other Certificates will be processed normally. Certificates with the matching thumbprint will be accepted as valid regardless of any other failure the Certificate might have.
+
+```powershell
+$Script = @{
+    if ($X509Certificate2.Thumbprint -eq '934367bf1c97033f877db0f15cb1b586957d313') {
+        return $true
+    }
+    elseif ($SslPolicyErrors -eq 'None') {
+        return $true
+    } 
+    else {
+        return $False
+    }
+}
+Invoke-WebRequest -CertificateValidationScript $Script -Uri 'https://server.contoso.com/'
+```
+
+`$SslPolicyErrors` will be `None` if the Certificate has not failed any of the normal checks that would be performed.
+
+### Example 6: Custom CertificateValidationScript (Restrictive)
+The following example shows how to use `-CertificateValidationScript` with a custom script to allow any valid Certificate that also has the Certificate Thumbprint of `934367bf1c97033f877db0f15cb1b586957d313` while all other Certificates will be denied. The Certificate must have a matching thumbprint and be valid for the normal checks done on Certificates. If the Certificate is not valid or does not have the correct thumbprint, it will be denied.
+
+```powershell
+$Script = @{
+    if ($SslPolicyErrors -eq 'None' -and $X509Certificate2.Thumbprint -eq '934367bf1c97033f877db0f15cb1b586957d313') {
+        return $true
+    }
+    else {
+        return $false
+    }
+}
+Invoke-WebRequest -CertificateValidationScript $Script -Uri 'https://server.contoso.com/'
+```
+
+
 ## PARAMETERS
 
 ### -Body
@@ -230,6 +267,36 @@ To get a certificate thumbprint, use the Get-Item or Get-ChildItem command in th
 
 ```yaml
 Type: String
+Parameter Sets: (All)
+Aliases:
+
+Required: False
+Position: Named
+Default value: None
+Accept pipeline input: False
+Accept wildcard characters: False
+```
+
+### -CertificateValidationScript
+Specifies a custom server Certificate validation script used to validate remote server Certificates. This functionality is similar to `[System.Net.ServicePointManager]::ServerCertificateValidationCallback` except it is valid only for the current run of `Invoke-WebRequest` and will not impact any other cmdlets, functions, or .NET calls. Four Automatic variables added to the `ScriptBlock` when it is called:
+
+- `$HttpRequestMessage` - Contains the `System.Net.Http.HttpRequestMessage` which is being sent to the remote server.
+- `$X509Certificate2` - Contains the `System.Security.Cryptography.X509Certificates.X509Certificate2` which is the Certificate being presented by the remote server.
+- `$X509Chain` - Contains the `System.Security.Cryptography.X509Certificates.X509Chain` which is the Certificate chain details.
+- `$SslPolicyErrors` - Contains the `System.Net.Security.SslPolicyErrors` which is the SSL Policies failures the normal processing detected on the Certificate. This will be `None` if no errors were detected.
+
+Using these four variables, more restrictive or permissive Certificate validations can be used instead of the default checks or without being completely permissive with `-SkipCertificateCheck`. Returning `$true` means that the Certificate is valid and that the request may proceed. Returning `$false` means that the Certificate is not valid and the request will halt. If more than one object is returned from the script block, only the first one will be checked for `$true` or `$false`.
+
+If both `-CertificateValidationScript` and `-SkipCertificateCheck` are supplied, `-SkipCertificateCheck` has precedence and the script in `-CertificateValidationScript` will be ignored.
+
+Errors and exceptions in the `ScriptBlock` will be treated as a Certificate failures.
+
+The `$using:` variable scope is not available in this `ScriptBlock` and, if used, will result in an exception and the Certificate being denied. The `ScriptBlock` has access to the current scope where `Invoke-WebRequest` is called and can access any variables, modules, functions, or cmdlets defined in that scope.
+
+The `X509Certificate2` Certificate and `X509Chain` available to the `ScriptBlock` are only available during execution and will not be available when the `ScriptBlock` finishes executing. For example, assigning them to a global variable will result in empty objects in the global scope.
+
+```yaml
+Type: ScriptBlock
 Parameter Sets: (All)
 Aliases:
 
