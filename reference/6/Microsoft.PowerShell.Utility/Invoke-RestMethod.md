@@ -18,8 +18,8 @@ Sends an HTTP or HTTPS request to a RESTful web service.
 ```powershell
 Invoke-RestMethod [-Method <WebRequestMethod>] [-CustomMethod <String>] [-UseBasicParsing] [-Uri] <Uri>
  [-WebSession <WebRequestSession>] [-SessionVariable <String>] [-Credential <PSCredential>]
- [-UseDefaultCredentials] [-CertificateThumbprint <String>] [-Certificate <X509Certificate>] [-SkipCertificateCheck]
- [-UserAgent <String>] [-DisableKeepAlive] [-TimeoutSec <Int32>] [-Headers <IDictionary>] [-SkipHeaderValidation]
+ [-UseDefaultCredentials] [-CertificateThumbprint <String>] [-Certificate <X509Certificate>] [-CertificateValidationScript <ScriptBlock>]
+ [-SkipCertificateCheck] [-UserAgent <String>] [-DisableKeepAlive] [-TimeoutSec <Int32>] [-Headers <IDictionary>] [-SkipHeaderValidation]
  [-MaximumRedirection <Int32>] [-Proxy <Uri>] [-ProxyCredential <PSCredential>] [-ProxyUseDefaultCredentials]
  [-FollowRelLink] [-MaximumFollowRelLink <Int32>] [-ResponseHeadersVariable <String>]
  [-Body <Object>] [-ContentType <String>] [-TransferEncoding <String>] [-InFile <String>] [-OutFile <String>]
@@ -67,10 +67,6 @@ In the following example, a user runs `Invoke-RestMethod` to perform a POST requ
 ```powershell
 $Cred = Get-Credential
 
-# Next, allow the use of self-signed SSL certificates.
-
-[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $True }
-
 # Create variables to store the values consumed by the Invoke-RestMethod command.
 # The search variable contents are later embedded in the body variable.
 
@@ -89,7 +85,7 @@ $Body = @{
 
 # Now, run the Invoke-RestMethod command with all variables in place, specifying a path and file name for the resulting CSV output file.
 
-Invoke-RestMethod -Method Post -Uri $url -Credential $Cred -Body $body -OutFile output.csv
+Invoke-RestMethod -Method Post -Uri $url -Credential $Cred -Body $body -OutFile output.csv -SkipCertificateCheck
 
 {"preview":true,"offset":0,"result":{"sourcetype":"contoso1","count":"9624"}}
 
@@ -109,6 +105,42 @@ Invoke-RestMethod -Method Post -Uri $url -Credential $Cred -Body $body -OutFile 
 
 Invoke-RestMethod https://api.github.com/repos/powershell/powershell/issues -FollowRelLink -MaximumFollowRelLink 2
 ```
+
+### Example 4: Custom CertificateValidationScript (Permissive)
+The following example shows how to use `-CertificateValidationScript` with a custom script to allow any certificate that has the Certificate Thumbprint of `934367bf1c97033f877db0f15cb1b586957d313` while all other certificates will be processed normally. Certificates with the matching thumbprint will be accepted as valid regardless of any other failure the certificate might have.
+
+```powershell
+$Script = @{
+    if ($X509Certificate2.Thumbprint -eq '934367bf1c97033f877db0f15cb1b586957d313') {
+        return $true
+    }
+    elseif ($SslPolicyErrors -eq 'None') {
+        return $true
+    } 
+    else {
+        return $False
+    }
+}
+Invoke-RestMethod -CertificateValidationScript $Script -Uri 'https://server.contoso.com/'
+```
+
+`$SslPolicyErrors` will be `None` if the Certificate has not failed any of the normal checks that would be performed.
+
+### Example 5: Custom CertificateValidationScript (Restrictive)
+The following example shows how to use `-CertificateValidationScript` with a custom script to allow any valid certificate that also has the Certificate Thumbprint of `934367bf1c97033f877db0f15cb1b586957d313` while all other certificates will be denied. The certificate must have a matching thumbprint and be valid for the normal checks done on certificates. If the certificate is not valid or does not have the correct thumbprint, it will be denied.
+
+```powershell
+$Script = @{
+    if ($SslPolicyErrors -eq 'None' -and $X509Certificate2.Thumbprint -eq '934367bf1c97033f877db0f15cb1b586957d313') {
+        return $true
+    }
+    else {
+        return $false
+    }
+}
+Invoke-RestMethod -CertificateValidationScript $Script -Uri 'https://server.contoso.com/'
+```
+
 
 ## Parameters
 
@@ -185,6 +217,36 @@ To get a certificate thumbprint, use the `Get-Item` or `Get-ChildItem` command i
 
 ```yaml
 Type: String
+Parameter Sets: (All)
+Aliases:
+
+Required: False
+Position: Named
+Default value: None
+Accept pipeline input: False
+Accept wildcard characters: False
+```
+
+### -CertificateValidationScript
+Specifies a custom server certificate validation script used to validate remote server Certificates. This functionality is similar to `[System.Net.ServicePointManager]::ServerCertificateValidationCallback` except it is valid only for the current run of `Invoke-RestMethod` and will not impact any other cmdlets, functions, or .NET calls. Four Automatic variables added to the `ScriptBlock` when it is called:
+
+- `$HttpRequestMessage` - Contains the `System.Net.Http.HttpRequestMessage` which is being sent to the remote server.
+- `$X509Certificate2` - Contains the `System.Security.Cryptography.X509Certificates.X509Certificate2` which is the Certificate being presented by the remote server.
+- `$X509Chain` - Contains the `System.Security.Cryptography.X509Certificates.X509Chain` which is the certificate chain details.
+- `$SslPolicyErrors` - Contains the `System.Net.Security.SslPolicyErrors` which is the SSL Policies failures the normal processing detected on the Certificate. This ill be `None` if no errors were detected.
+
+Using these Four variables more restrictive or permissive Certificate validations can be use instead of the default checks or without being completely permissive with `-SkipCertificateCheck`. Returning `$true` means that the certificate is valid and that the request may proceed. Returning `$false` means that the Certificate is not valid and the request will halt. If more than one object is returned from the script block, only the first one will be checked for `$true` or `$false`.
+
+If both `-CertificateValidationScript` and `-SkipCertificateCheck` are supplied, `-SkipCertificateCheck` has precedence and the script in `-CertificateValidationScript` will be ignored.
+
+Errors and exceptions in the `ScriptBlock` will be treated as a Certificate failures.
+
+The `$using:` variable scope is not available in this `ScriptBlock` and, if used, will result in an exception and the Certificate being denied. The `ScriptBlock` has access to the current scope where `Invoke-RestMethod` is called and can access any variables, modules, functions, or cmdlets defined in that scope.
+
+The `X509Certificate2` certificate and `X509Chain` available to the `ScriptBlock` are only available during execution and will not be available when the `ScriptBlock` finishes executing. For example, assigning them to a global variable will result in empty objects in the global scope.
+
+```yaml
+Type: ScriptBlock
 Parameter Sets: (All)
 Aliases:
 
