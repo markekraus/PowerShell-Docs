@@ -101,6 +101,7 @@ to perform a POST request on an intranet website in the user's organization.
 $Cred = Get-Credential
 
 # Next, allow the use of self-signed SSL certificates.
+# PowerShell 5.1 only, use -SkipCertificateCheck for PowerShell Core
 
 Add-Type @"
     using System.Net;
